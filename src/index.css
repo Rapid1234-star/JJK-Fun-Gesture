@@ -1,0 +1,70 @@
+@import url('https://fonts.googleapis.com/css2?family=Noto+Serif+JP:wght@400;700&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --font-serif: "Noto Serif JP", serif;
+}
+
+@keyframes voidGlow {
+  0%   { 
+      text-shadow: 0 0 30px rgba(200,235,255,0.9), 
+                   0 0 70px rgba(100,180,240,0.7), 
+                   0 0 120px rgba(60,140,220,0.4); 
+  }
+  50%  { 
+      text-shadow: 0 0 50px rgba(255,255,255,1), 
+                   0 0 100px rgba(160,216,239,1), 
+                   0 0 160px rgba(100,180,240,0.8),
+                   0 0 220px rgba(60,140,220,0.5); 
+  }
+  100% { 
+      text-shadow: 0 0 30px rgba(200,235,255,0.9), 
+                   0 0 70px rgba(100,180,240,0.7), 
+                   0 0 120px rgba(60,140,220,0.4); 
+  }
+}
+
+@keyframes domainShock {
+  0%   { filter: blur(0px) brightness(1);   transform: scale(1); }
+  15%  { filter: blur(10px) brightness(2.2); transform: scale(1.04); }
+  40%  { filter: blur(4px) brightness(1.4);  transform: scale(1.01); }
+  100% { filter: blur(0px) brightness(1);   transform: scale(1); }
+}
+
+@keyframes crackIn {
+  0%   { opacity: 0; stroke-dashoffset: 500; }
+  20%  { opacity: 1; stroke-dashoffset: 0; }
+  70%  { opacity: 0.8; }
+  100% { opacity: 0; }
+}
+
+@keyframes eyePulse {
+  0%, 100% { box-shadow: 0 0 18px #a0d8ef, 0 0 40px #5ab4e0, 0 0 80px rgba(160,216,239,0.5); }
+  50%       { box-shadow: 0 0 30px #ffffff, 0 0 70px #a0d8ef, 0 0 130px rgba(160,216,239,0.8); }
+}
+
+@keyframes cameraPulse {
+  0%   { opacity: 0.4; transform: scale(0.8); }
+  50%  { opacity: 1;   transform: scale(1.2); }
+  100% { opacity: 0.4; transform: scale(0.8); }
+}
+
+.animate-void-glow {
+  animation: voidGlow 5s ease-in-out infinite;
+}
+
+.animate-domain-shock {
+  animation: domainShock 1.1s cubic-bezier(0.16,1,0.3,1) forwards;
+}
+
+.animate-crack-in {
+  animation: crackIn 1.4s cubic-bezier(0.16,1,0.3,1) forwards;
+}
+
+.animate-eye-pulse {
+  animation: eyePulse 3s ease-in-out infinite;
+}
+
+.animate-camera-pulse {
+  animation: cameraPulse 1.5s infinite;
+}
