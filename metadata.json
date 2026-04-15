@@ -1,6 +1,6 @@
 {
-  "name": "Experiment: Hollow purple ",
-  "description": "An immersive experience featuring Gojo Satoru\u0027s Unlimited Void, Cursed Technique Reversal: Red, and Sukuna\u0027s Malevolent Shrine with real-time hand tracking.",
+  "name": "JJK Domain Expansion Hub",
+  "description": "An immersive Jujutsu Kaisen-inspired experience featuring Unlimited Void, Reversal: Red, and Malevolent Shrine with dynamic visuals and real-time interaction.",
   "requestFramePermissions": [
     "camera",
     "microphone",
