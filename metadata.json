@@ -1,5 +1,9 @@
 {
-  "name": "JJK Domain Expansion Hub",
-  "description": "A cinematic, browser-based hand-gesture experience inspired by Jujutsu Kaisen. Trigger Unlimited Void, Reversal Red, Lapse Blue, and Malevolent Shrine in real time.",
-  "requestFramePermissions": ["camera"]
+  "name": "Experiment: Hollow purple ",
+  "description": "An immersive experience featuring Gojo Satoru\u0027s Unlimited Void, Cursed Technique Reversal: Red, and Sukuna\u0027s Malevolent Shrine with real-time hand tracking.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone",
+    "geolocation"
+  ]
 }

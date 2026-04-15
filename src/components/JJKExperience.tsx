@@ -18,7 +18,7 @@ const DOMAIN_STATES = {
 } as const;
 
 type DomainState = typeof DOMAIN_STATES[keyof typeof DOMAIN_STATES];
-type ActiveDomain = 'gojo_void' | 'gojo_red' | 'gojo_blue' | 'sukuna_shrine' | null;
+type ActiveDomain = 'gojo_void' | 'gojo_red' | 'gojo_blue' | 'gojo_purple' | 'sukuna_shrine' | null;
 
 export default function JJKExperience() {
   // --- Refs ---
@@ -64,22 +64,34 @@ export default function JJKExperience() {
     fingertipWorld: new THREE.Vector3(0, 0, 0),
     fingertipRed: new THREE.Vector3(0, 0, 0),
     fingertipBlue: new THREE.Vector3(0, 0, 0),
+    fingertipRedVel: new THREE.Vector3(0, 0, 0),
+    fingertipBlueVel: new THREE.Vector3(0, 0, 0),
+    lastHandTime: 0,
     activeTechniques: {
       red: false,
-      blue: false
+      blue: false,
+      purple: false
     },
     techBlendRed: 0,
     techBlendBlue: 0,
+    techBlendPurple: 0,
+    purpleShockwave: 0,
+    purpleProximity: 0,
+    purpleCooldown: 0,
+    purplePhase: 'none' as 'none' | 'forming' | 'active' | 'imploding',
+    purpleClock: 0,
     holdCounts: {
       gojo_void: 0,
       gojo_red: 0,
       gojo_blue: 0,
+      gojo_purple: 0,
       sukuna_shrine: 0
     },
     lostCounts: {
       gojo_void: 0,
       gojo_red: 0,
       gojo_blue: 0,
+      gojo_purple: 0,
       sukuna_shrine: 0
     }
   });
@@ -90,6 +102,7 @@ export default function JJKExperience() {
   const [currentDomainName, setCurrentDomainName] = useState<string>('—');
   const [cameraStatus, setCameraStatus] = useState<'Off' | 'Active'>('Off');
   const [cameraError, setCameraError] = useState<string | null>(null);
+  const [retryCount, setRetryCount] = useState(0);
   const [gestureProgress, setGestureProgress] = useState(0);
   const [detectedSign, setDetectedSign] = useState<string | null>(null);
   const [slashes, setSlashes] = useState<{ id: number; style: React.CSSProperties }[]>([]);
@@ -99,33 +112,42 @@ export default function JJKExperience() {
   const [activePill, setActivePill] = useState<string | null>(null);
   const [showCracks, setShowCracks] = useState(false);
   const [domainShock, setDomainShock] = useState(false);
+  const [isPurpleReady, setIsPurpleReady] = useState(false);
+  const [showHoldInstruction, setShowHoldInstruction] = useState(false);
   const slashIdRef = useRef(0);
   const debrisIdRef = useRef(0);
-
-  const syncOverlayCanvasSizes = () => {
-    const width = window.innerWidth;
-    const height = window.innerHeight;
-
-    if (handCanvasRef.current) {
-      handCanvasRef.current.width = width;
-      handCanvasRef.current.height = height;
-    }
-
-    if (kanjiCanvasRef.current) {
-      kanjiCanvasRef.current.width = width;
-      kanjiCanvasRef.current.height = height;
-    }
-  };
 
   // --- Initialization ---
 
   useEffect(() => {
     if (!isInitialized) return;
 
+    const handleResize = () => {
+      if (!cameraRef.current || !rendererRef.current || !composerRef.current) return;
+      const width = window.innerWidth;
+      const height = window.innerHeight;
+
+      cameraRef.current.aspect = width / height;
+      cameraRef.current.updateProjectionMatrix();
+
+      rendererRef.current.setSize(width, height);
+      composerRef.current.setSize(width, height);
+
+      if (handCanvasRef.current) {
+        handCanvasRef.current.width = width;
+        handCanvasRef.current.height = height;
+      }
+      if (kanjiCanvasRef.current) {
+        kanjiCanvasRef.current.width = width;
+        kanjiCanvasRef.current.height = height;
+      }
+    };
+
     // Initialize Three.js
     initThree();
-    // Ensure overlay canvases match viewport before first hand-tracking frame.
-    syncOverlayCanvasSizes();
+    
+    // Initial resize call to set canvas dimensions
+    handleResize();
     
     // Initialize MediaPipe
     const startCamera = async () => {
@@ -150,10 +172,14 @@ export default function JJKExperience() {
 
       if (videoRef.current) {
         try {
+          setCameraError(null);
           // Explicitly request permission first
           const stream = await navigator.mediaDevices.getUserMedia({ 
             video: { width: 640, height: 480 } 
           });
+          
+          // If we got the stream, we can stop it and let the Camera utility take over
+          // or just use it. MediaPipe Camera utility is better for synchronization.
           stream.getTracks().forEach(track => track.stop());
 
           const camera = new Camera(videoRef.current, {
@@ -172,12 +198,14 @@ export default function JJKExperience() {
         } catch (err: any) {
           console.error("Camera failed to start:", err);
           setCameraStatus('Off');
-          if (err.name === 'NotAllowedError' || err.message?.includes('Permission denied')) {
-            setCameraError('Camera permission denied. Please click the camera icon in your browser address bar to allow access and refresh.');
-          } else if (err.name === 'NotFoundError') {
-            setCameraError('No camera device found. Please connect a camera and refresh.');
+          if (err.name === 'NotAllowedError' || err.message?.includes('Permission denied') || err.name === 'PermissionDeniedError') {
+            setCameraError('Camera permission denied. Please allow camera access in your browser settings and click Retry.');
+          } else if (err.name === 'NotFoundError' || err.name === 'DevicesNotFoundError') {
+            setCameraError('No camera device found. Please connect a camera and click Retry.');
+          } else if (err.name === 'NotReadableError' || err.name === 'TrackStartError') {
+            setCameraError('Camera is already in use by another application. Please close it and click Retry.');
           } else {
-            setCameraError('Failed to access camera: ' + err.message);
+            setCameraError('Failed to access camera: ' + (err.message || 'Unknown error'));
           }
         }
       }
@@ -190,20 +218,6 @@ export default function JJKExperience() {
       handsInstance = instance;
     });
 
-    const handleResize = () => {
-      if (!cameraRef.current || !rendererRef.current || !composerRef.current) return;
-      const width = window.innerWidth;
-      const height = window.innerHeight;
-
-      cameraRef.current.aspect = width / height;
-      cameraRef.current.updateProjectionMatrix();
-
-      rendererRef.current.setSize(width, height);
-      composerRef.current.setSize(width, height);
-
-      syncOverlayCanvasSizes();
-    };
-
     window.addEventListener('resize', handleResize);
 
     return () => {
@@ -212,7 +226,11 @@ export default function JJKExperience() {
       rendererRef.current?.dispose();
       if (handsInstance) handsInstance.close();
     };
-  }, [isInitialized]);
+  }, [isInitialized, retryCount]);
+
+  const handleRetryCamera = () => {
+    setRetryCount(prev => prev + 1);
+  };
 
   const makeGlowTexture = (innerColor: string, midColor: string, outerColor: string) => {
     const size = 128;
@@ -272,12 +290,14 @@ export default function JJKExperience() {
     const voidPositions = new Float32Array(particleCount * 3);
     const redPositions = new Float32Array(particleCount * 3);
     const bluePositions = new Float32Array(particleCount * 3);
+    const purplePositions = new Float32Array(particleCount * 3);
     const shrinePositions = new Float32Array(particleCount * 3);
 
     const idleColors = new Float32Array(particleCount * 3);
     const voidColors = new Float32Array(particleCount * 3);
     const redColors = new Float32Array(particleCount * 3);
     const blueColors = new Float32Array(particleCount * 3);
+    const purpleColors = new Float32Array(particleCount * 3);
     const shrineColors = new Float32Array(particleCount * 3);
 
     const voidDistances = new Float32Array(particleCount);
@@ -407,6 +427,29 @@ export default function JJKExperience() {
         blueColors[i3 + 2] = idleColors[i3 + 2] * 0.2;
       }
 
+      // Gojo Purple (Hollow Purple)
+      const r_p = Math.pow(Math.random(), 2.0) * 0.45;
+      const phi_p = Math.acos(2 * Math.random() - 1);
+      const theta_p = 2 * Math.PI * Math.random();
+      purplePositions[i3] = r_p * Math.sin(phi_p) * Math.cos(theta_p);
+      purplePositions[i3 + 1] = r_p * Math.cos(phi_p);
+      purplePositions[i3 + 2] = r_p * Math.sin(phi_p) * Math.sin(theta_p);
+      
+      const pVariant = Math.random();
+      if (pVariant < 0.6) {
+        purpleColors[i3] = 0.6 + Math.random() * 0.4; // Bright Purple/Violet
+        purpleColors[i3 + 1] = 0.0;
+        purpleColors[i3 + 2] = 0.8 + Math.random() * 0.2;
+      } else if (pVariant < 0.85) {
+        purpleColors[i3] = 0.4 + Math.random() * 0.2; // Deep Violet
+        purpleColors[i3 + 1] = 0.0;
+        purpleColors[i3 + 2] = 0.6 + Math.random() * 0.4;
+      } else {
+        purpleColors[i3] = 0.9 + Math.random() * 0.1; // White-hot purple sparks
+        purpleColors[i3 + 1] = 0.7 + Math.random() * 0.3;
+        purpleColors[i3 + 2] = 1.0;
+      }
+
       // Sukuna Shrine
       const r_s = Math.random();
       if (r_s < 0.18) {
@@ -514,8 +557,8 @@ export default function JJKExperience() {
 
     // Store target arrays in a ref for the animation loop
     (particles as any).userData = {
-      idlePositions, voidPositions, redPositions, bluePositions, shrinePositions,
-      idleColors, voidColors, redColors, blueColors, shrineColors,
+      idlePositions, voidPositions, redPositions, bluePositions, purplePositions, shrinePositions,
+      idleColors, voidColors, redColors, blueColors, purpleColors, shrineColors,
       voidDistances, voidYDistances, shrineDistances
     };
 
@@ -535,12 +578,6 @@ export default function JJKExperience() {
 
     // Water (Sukuna)
     const waterGeo = new THREE.PlaneGeometry(80, 80, 64, 64);
-    const waterMat = new THREE.MeshBasicMaterial({ color: 0x260008, transparent: true, opacity: 0.9 });
-    const waterMesh = new THREE.Mesh(waterGeo, waterMat);
-    waterMesh.rotation.x = -Math.PI / 2;
-    waterMesh.position.y = -3.2;
-    scene.add(waterMesh);
-    waterMeshRef.current = waterMesh;
 
     // Start Animation Loop
     animate();
@@ -685,9 +722,16 @@ export default function JJKExperience() {
 
   const handleStateTransitions = (delta: number) => {
     const state = stateRef.current;
+    
+    // Update cooldowns
+    if (state.purpleCooldown > 0) {
+      state.purpleCooldown = Math.max(0, state.purpleCooldown - delta);
+    }
+
     const isGojoVoid = state.activeDomain === 'gojo_void';
+    const isSukuna = state.activeDomain === 'sukuna_shrine';
     const chargeDur = isGojoVoid ? 0.25 : 0.2;
-    const assembleDur = isGojoVoid ? 1.1 : 0.65;
+    const assembleDur = isGojoVoid ? 0.95 : isSukuna ? 0.55 : 0.65;
     const collapseDur = isGojoVoid ? 0.9 : 0.6;
 
     if (state.domainState === DOMAIN_STATES.CHARGE) {
@@ -721,10 +765,12 @@ export default function JJKExperience() {
 
     let blendT = 0;
     const isGojoVoid = state.activeDomain === 'gojo_void';
+    const isSukuna = state.activeDomain === 'sukuna_shrine';
     const isRed = state.activeDomain === 'gojo_red' || state.techBlendRed > 0;
     const isBlue = state.activeDomain === 'gojo_blue' || state.techBlendBlue > 0;
+    const isPurple = state.techBlendPurple > 0;
     
-    const assembleDur = isGojoVoid ? 1.1 : 0.65;
+    const assembleDur = isGojoVoid ? 0.95 : isSukuna ? 0.8 : 0.65;
     const collapseDur = isGojoVoid ? 0.9 : 0.6;
 
     if (state.domainState === DOMAIN_STATES.ASSEMBLE) {
@@ -810,22 +856,24 @@ export default function JJKExperience() {
       if (state.activeDomain === null) {
         const rW = state.techBlendRed;
         const bW = state.techBlendBlue;
+        const pW = state.techBlendPurple;
         
         let redWeight = 0;
         let blueWeight = 0;
+        let purpleWeight = pW;
         
         if (i < 1000) {
-          redWeight = rW;
+          redWeight = rW * (1 - pW);
           blueWeight = 0;
         } else if (i >= 2000) {
           redWeight = 0;
-          blueWeight = bW;
+          blueWeight = bW * (1 - pW);
         } else if (i >= 1000 && i < 1500) {
-          redWeight = rW;
-          blueWeight = bW * (1 - rW);
+          redWeight = rW * (1 - pW);
+          blueWeight = bW * (1 - rW) * (1 - pW);
         } else { // 1500 - 1999
-          redWeight = rW * (1 - bW);
-          blueWeight = bW;
+          redWeight = rW * (1 - bW) * (1 - pW);
+          blueWeight = bW * (1 - pW);
         }
 
         const ix = idlePos[i3], iy = idlePos[i3+1], iz = idlePos[i3+2];
@@ -837,14 +885,17 @@ export default function JJKExperience() {
         const bx_ = userData.bluePositions[i3], by_ = userData.bluePositions[i3+1], bz_ = userData.bluePositions[i3+2];
         const br = userData.blueColors[i3], bg = userData.blueColors[i3+1], bb = userData.blueColors[i3+2];
 
-        const wIdle = (1 - redWeight) * (1 - blueWeight);
-        tx = ix * wIdle + rx * redWeight * (1 - blueWeight) + bx_ * blueWeight;
-        ty = iy * wIdle + ry * redWeight * (1 - blueWeight) + by_ * blueWeight;
-        tz = iz * wIdle + rz * redWeight * (1 - blueWeight) + bz_ * blueWeight;
+        const px = userData.purplePositions[i3], py = userData.purplePositions[i3+1], pz = userData.purplePositions[i3+2];
+        const pr = userData.purpleColors[i3], pg = userData.purpleColors[i3+1], pb = userData.purpleColors[i3+2];
+
+        const wIdle = (1 - redWeight) * (1 - blueWeight) * (1 - purpleWeight);
+        tx = ix * wIdle + rx * redWeight * (1 - blueWeight) * (1 - purpleWeight) + bx_ * blueWeight * (1 - purpleWeight) + px * purpleWeight;
+        ty = iy * wIdle + ry * redWeight * (1 - blueWeight) * (1 - purpleWeight) + by_ * blueWeight * (1 - purpleWeight) + py * purpleWeight;
+        tz = iz * wIdle + rz * redWeight * (1 - blueWeight) * (1 - purpleWeight) + bz_ * blueWeight * (1 - purpleWeight) + pz * purpleWeight;
         
-        tr = ir * wIdle + rr * redWeight * (1 - blueWeight) + br * blueWeight;
-        tg = ig * wIdle + rg * redWeight * (1 - blueWeight) + bg * blueWeight;
-        tb = ib * wIdle + rb * redWeight * (1 - blueWeight) + bb * blueWeight;
+        tr = ir * wIdle + rr * redWeight * (1 - blueWeight) * (1 - purpleWeight) + br * blueWeight * (1 - purpleWeight) + pr * purpleWeight;
+        tg = ig * wIdle + rg * redWeight * (1 - blueWeight) * (1 - purpleWeight) + bg * blueWeight * (1 - purpleWeight) + pg * purpleWeight;
+        tb = ib * wIdle + rb * redWeight * (1 - blueWeight) * (1 - purpleWeight) + bb * blueWeight * (1 - purpleWeight) + pb * purpleWeight;
       }
 
       let bx, by, bz;
@@ -892,34 +943,116 @@ export default function JJKExperience() {
       if (state.activeDomain === null) {
         const rW = state.techBlendRed;
         const bW = state.techBlendBlue;
+        const pW = state.techBlendPurple;
         
         let redWeight = 0;
         let blueWeight = 0;
-        if (i < 1000) { redWeight = rW; }
-        else if (i >= 2000) { blueWeight = bW; }
-        else if (i >= 1000 && i < 1500) { redWeight = rW; blueWeight = bW * (1 - rW); }
-        else { redWeight = rW * (1 - bW); blueWeight = bW; }
+        let purpleWeight = pW;
+
+        if (i < 1000) { redWeight = rW * (1 - pW); }
+        else if (i >= 2000) { blueWeight = bW * (1 - pW); }
+        else if (i >= 1000 && i < 1500) { redWeight = rW * (1 - pW); blueWeight = bW * (1 - rW) * (1 - pW); }
+        else { redWeight = rW * (1 - bW) * (1 - pW); blueWeight = bW * (1 - pW); }
 
         if (redWeight > 0) {
-          bx += state.fingertipRed.x * redWeight;
-          by += (state.fingertipRed.y + 0.65) * redWeight;
-          bz += state.fingertipRed.z * redWeight;
+          const targetX = state.fingertipRed.x;
+          const targetY = state.fingertipRed.y + 0.15;
+          const targetZ = state.fingertipRed.z;
+          bx += targetX * redWeight;
+          by += targetY * redWeight;
+          bz += targetZ * redWeight;
         }
         if (blueWeight > 0) {
           const suck = 0.12 * Math.sin(time * 12 + i * 0.1);
           const sX = bx * (1 - suck), sY = by * (1 - suck), sZ = bz * (1 - suck);
-          const bX = sX + state.fingertipBlue.x;
-          const bY = sY + state.fingertipBlue.y + 0.65;
-          const bZ = sZ + state.fingertipBlue.z;
+          
+          const targetX = state.fingertipBlue.x;
+          const targetY = state.fingertipBlue.y + 0.15;
+          const targetZ = state.fingertipBlue.z;
+
+          const bX = sX + targetX;
+          const bY = sY + targetY;
+          const bZ = sZ + targetZ;
           
           bx = bx * (1 - blueWeight) + bX * blueWeight;
           by = by * (1 - blueWeight) + bY * blueWeight;
           bz = bz * (1 - blueWeight) + bZ * blueWeight;
         }
+        if (purpleWeight > 0) {
+          // Hollow Purple Animation: Swirl, Expand, Implode
+          const pPhase = state.purplePhase;
+          const pClock = state.purpleClock;
+          
+          let pScale = 1.0;
+          if (pPhase === 'forming') {
+            pScale = 0.4 + Math.sin(pClock * 12) * 0.15;
+          } else if (pPhase === 'active') {
+            // Expansion - more exponential
+            pScale = 1.0 + Math.pow(pClock / 1.8, 3) * 25.0;
+          } else if (pPhase === 'imploding') {
+            // Implosion - faster
+            pScale = Math.max(0, 25.0 * (1 - pClock * 8));
+          }
+
+          const swirlSpeed = 20.0 + pScale * 8.0;
+          const swirlPhase = time * swirlSpeed + i * 0.15;
+          const swirlRadius = 0.35 * pScale;
+          
+          // Add some "jitter" to make it look unstable
+          const jitter = (Math.random() - 0.5) * 0.05 * purpleWeight;
+          const sX = Math.cos(swirlPhase) * swirlRadius + jitter;
+          const sY = Math.sin(swirlPhase) * swirlRadius + jitter;
+          const sZ = Math.sin(swirlPhase * 0.7) * swirlRadius + jitter;
+
+          // Midpoint between hands
+          const midX = (state.fingertipRed.x + state.fingertipBlue.x) / 2;
+          const midY = (state.fingertipRed.y + state.fingertipBlue.y) / 2 + 0.15;
+          const midZ = (state.fingertipRed.z + state.fingertipBlue.z) / 2;
+
+          bx = bx * (1 - purpleWeight) + (midX + sX) * purpleWeight;
+          by = by * (1 - purpleWeight) + (midY + sY) * purpleWeight;
+          bz = bz * (1 - purpleWeight) + (midZ + sZ) * purpleWeight;
+        }
+
+        // Apply shockwave and distortion to all particles
+        if (state.purpleShockwave > 0 || state.techBlendPurple > 0) {
+          const midX = (state.fingertipRed.x + state.fingertipBlue.x) / 2;
+          const midY = (state.fingertipRed.y + state.fingertipBlue.y) / 2 + 0.15;
+          const midZ = (state.fingertipRed.z + state.fingertipBlue.z) / 2;
+          
+          const dx = bx - midX;
+          const dy = by - midY;
+          const dz = bz - midZ;
+          const dSq = dx*dx + dy*dy + dz*dz;
+          const dist = Math.sqrt(dSq) + 0.001;
+
+          // Shockwave push
+          if (state.purpleShockwave > 0) {
+            const waveR = state.purpleClock * 40.0; // Rapidly expanding wave
+            const waveDist = Math.abs(dist - waveR);
+            if (waveDist < 2.0) {
+              const push = (1.0 - waveDist / 2.0) * state.purpleShockwave * 5.0;
+              bx += (dx / dist) * push;
+              by += (dy / dist) * push;
+              bz += (dz / dist) * push;
+            }
+          }
+
+          // Environment Distortion (Lens effect)
+          if (state.techBlendPurple > 0) {
+            const distortionRadius = 5.0 * state.techBlendPurple;
+            if (dist < distortionRadius) {
+              const strength = (1.0 - dist / distortionRadius) * state.techBlendPurple * 0.4;
+              const swirl = Math.sin(time * 10 + dist * 2) * strength;
+              bx += (dy / dist) * swirl;
+              by += (-dx / dist) * swirl;
+            }
+          }
+        }
       } else if (state.activeDomain === 'gojo_red' && blendT > 0.8) {
-        bx += state.fingertipRed.x; by += state.fingertipRed.y + 0.65; bz += state.fingertipRed.z;
+        bx += state.fingertipRed.x; by += state.fingertipRed.y + 0.15; bz += state.fingertipRed.z;
       } else if (state.activeDomain === 'gojo_blue' && blendT > 0.8) {
-        bx += state.fingertipBlue.x; by += state.fingertipBlue.y + 0.65; bz += state.fingertipBlue.z;
+        bx += state.fingertipBlue.x; by += state.fingertipBlue.y + 0.15; bz += state.fingertipBlue.z;
       }
 
       positions[i3] = bx;
@@ -970,6 +1103,18 @@ export default function JJKExperience() {
         }
       }
 
+      if (isPurple) {
+        const flicker = 0.8 + Math.random() * 0.4;
+        r *= flicker;
+        g *= 0.2; // Keep green very low for deep purple
+        b *= flicker;
+        
+        // Add a white-hot core boost
+        if (i % 15 === 0) {
+          r = 0.9; g = 0.8; b = 1.0;
+        }
+      }
+
       colors[i3] = Math.min(1, r);
       colors[i3 + 1] = Math.min(1, g);
       colors[i3 + 2] = Math.min(1, b);
@@ -983,9 +1128,9 @@ export default function JJKExperience() {
       if (state.activeDomain === 'gojo_void') {
         particles.material.opacity = 0.72 + blendT * 0.48 + state.pulseStrength * 0.22 + state.domainInteraction * 0.18;
         particles.material.size = 0.09 + blendT * 0.04 + state.pulseStrength * 0.012;
-      } else if (state.activeDomain === 'gojo_red' || state.activeDomain === 'gojo_blue' || state.activeTechniques.red || state.activeTechniques.blue) {
-        particles.material.size = 0.09;
-        particles.material.opacity = 0.85;
+      } else if (state.activeDomain === 'gojo_red' || state.activeDomain === 'gojo_blue' || state.activeDomain === 'gojo_purple' || state.activeTechniques.red || state.activeTechniques.blue || state.activeTechniques.purple) {
+        particles.material.size = state.activeTechniques.purple ? 0.15 : 0.09;
+        particles.material.opacity = 0.95;
       } else {
         particles.material.size = state.activeDomain === 'sukuna_shrine' ? 0.12 : 0.12;
         particles.material.opacity = 0.8;
@@ -1045,7 +1190,16 @@ export default function JJKExperience() {
     }
 
     if (bloomPassRef.current) {
-      if (state.activeDomain === 'gojo_void') {
+      if (state.activeTechniques.purple) {
+        const pW = state.techBlendPurple;
+        const pPhase = state.purplePhase;
+        let pBoost = 0;
+        if (pPhase === 'active') pBoost = 2.5;
+        if (pPhase === 'imploding') pBoost = 4.0;
+        
+        bloomPassRef.current.strength = 2.0 + pW * 3.0 + pBoost;
+        bloomPassRef.current.radius = 0.5 + pW * 0.5;
+      } else if (state.activeDomain === 'gojo_void') {
         const baseBloom = 1.35 + blendT * 0.85;
         bloomPassRef.current.strength = baseBloom + state.pulseStrength * 1.15 + state.domainInteraction * 0.8;
         bloomPassRef.current.radius = 0.48 + 0.18 * state.pulseStrength;
@@ -1074,6 +1228,65 @@ export default function JJKExperience() {
         drawLandmarks(ctx, landmarks, { color: 'rgba(255,255,255,0.8)', lineWidth: 1, radius: 3 });
       }
       
+      // Draw Hollow Purple Ready Cue
+      const state = stateRef.current;
+      if (state.purpleProximity > 0 && results.multiHandLandmarks.length === 2) {
+        const proximity = state.purpleProximity;
+        const pulse = Math.sin(Date.now() * 0.01) * 0.5 + 0.5;
+        const intensity = proximity * (0.6 + pulse * 0.4);
+        
+        // Find index finger tips
+        const landmarks = results.multiHandLandmarks;
+        const handedness = results.multiHandedness;
+        
+        let redTip = null;
+        let blueTip = null;
+        
+        for (let i = 0; i < landmarks.length; i++) {
+          if (handedness[i].label === 'Right') redTip = landmarks[i][8];
+          if (handedness[i].label === 'Left') blueTip = landmarks[i][8];
+        }
+        
+        if (redTip && blueTip) {
+          const rX = redTip.x * canvas.width;
+          const rY = redTip.y * canvas.height;
+          const bX = blueTip.x * canvas.width;
+          const bY = blueTip.y * canvas.height;
+          
+          // Draw glows at fingertips
+          const drawGlow = (x: number, y: number, color: string) => {
+            const grad = ctx.createRadialGradient(x, y, 0, x, y, 40 * intensity);
+            grad.addColorStop(0, color);
+            grad.addColorStop(1, 'transparent');
+            ctx.fillStyle = grad;
+            ctx.beginPath();
+            ctx.arc(x, y, 40 * intensity, 0, Math.PI * 2);
+            ctx.fill();
+          };
+          
+          drawGlow(rX, rY, `rgba(255, 50, 50, ${0.8 * intensity})`);
+          drawGlow(bX, bY, `rgba(50, 150, 255, ${0.8 * intensity})`);
+          
+          // Draw connecting arc/lightning
+          ctx.beginPath();
+          ctx.moveTo(rX, rY);
+          ctx.lineTo(bX, bY);
+          ctx.strokeStyle = `rgba(200, 100, 255, ${0.5 * intensity})`;
+          ctx.lineWidth = 2 * intensity;
+          ctx.stroke();
+          
+          // Add some "sparks"
+          if (Math.random() < 0.3) {
+            const midX = (rX + bX) / 2 + (Math.random() - 0.5) * 20;
+            const midY = (rY + bY) / 2 + (Math.random() - 0.5) * 20;
+            ctx.fillStyle = '#fff';
+            ctx.beginPath();
+            ctx.arc(midX, midY, 1 + Math.random() * 2, 0, Math.PI * 2);
+            ctx.fill();
+          }
+        }
+      }
+      
       detectGestures(results);
     } else {
       handleNoHands();
@@ -1083,6 +1296,10 @@ export default function JJKExperience() {
 
   const detectGestures = (results: Results) => {
     const state = stateRef.current;
+    const now = performance.now();
+    const dt = state.lastHandTime > 0 ? (now - state.lastHandTime) / 1000 : 0.016;
+    state.lastHandTime = now;
+
     const landmarks = results.multiHandLandmarks;
     const handedness = results.multiHandedness;
 
@@ -1091,27 +1308,13 @@ export default function JJKExperience() {
     let gojoBlueDetected = false;
     let sukunaShrineDetected = false;
 
-    if (landmarks.length >= 1 && handedness) {
-      for (let i = 0; i < landmarks.length; i++) {
-        const lm = landmarks[i];
-        const label = handedness[i].label; // 'Left' or 'Right'
-        
-        if (classifyGojoVoid(lm)) gojoVoidDetected = true;
-        
-        if (classifyGojoRed(lm)) {
-          if (label === 'Right') {
-            gojoRedDetected = true;
-            updateFingertipWorld(lm, 'red');
-          } else if (label === 'Left') {
-            gojoBlueDetected = true;
-            updateFingertipWorld(lm, 'blue');
-          }
-        }
-      }
-    }
-
-    // Sukuna Shrine Sign (Two hands mudra)
-    if (landmarks.length === 2 && handedness) {
+    // 1. Detect Sukuna Shrine Sign first (Two hands mudra)
+    // Disable Sukuna detection if Gojo's techniques are active to prevent accidental triggers during Hollow Purple
+    // Also check for Hollow Purple cooldown
+    const gojoActive = state.activeTechniques.red || state.activeTechniques.blue || state.activeTechniques.purple;
+    const inCooldown = state.purpleCooldown > 0;
+    
+    if (!inCooldown && !gojoActive && landmarks.length === 2 && handedness) {
       const leftIdx = handedness.findIndex(h => h.label === 'Left');
       const rightIdx = handedness.findIndex(h => h.label === 'Right');
       if (leftIdx !== -1 && rightIdx !== -1) {
@@ -1120,6 +1323,42 @@ export default function JJKExperience() {
         }
       }
     }
+
+    // 2. Detect single hand gestures
+    if (landmarks.length >= 1 && handedness) {
+      // Check if hands are close to each other (likely a two-handed gesture)
+      let handsClose = false;
+      if (landmarks.length === 2) {
+        const dSq = (a: any, b: any) => (a.x - b.x)**2 + (a.y - b.y)**2;
+        // Distance between middle finger bases
+        const d = dSq(landmarks[0][9], landmarks[1][9]);
+        if (d < 0.08) handsClose = true; 
+      }
+
+      for (let i = 0; i < landmarks.length; i++) {
+        const lm = landmarks[i];
+        const label = handedness[i].label; // 'Left' or 'Right'
+        
+        // ALWAYS update fingertip positions if hand is seen for maximum responsiveness
+        if (label === 'Right') updateFingertipWorld(lm, dt, 'red');
+        if (label === 'Left') updateFingertipWorld(lm, dt, 'blue');
+
+        if (classifyGojoVoid(lm)) gojoVoidDetected = true;
+        
+        // Only detect Red/Blue if Sukuna is NOT detected and hands are NOT close
+        // This prevents accidental triggers during the Sukuna mudra formation
+        if (!inCooldown && !sukunaShrineDetected && !handsClose && classifyGojoRed(lm)) {
+          if (label === 'Right') {
+            gojoRedDetected = true;
+          } else if (label === 'Left') {
+            gojoBlueDetected = true;
+          }
+        }
+      }
+    }
+
+    if (gojoVoidDetected && !inCooldown) gojoVoidDetected = true;
+    else gojoVoidDetected = false;
 
     // Handle detection counts
     updateGestureProgress('gojo_void', gojoVoidDetected);
@@ -1139,6 +1378,7 @@ export default function JJKExperience() {
     }
 
     const sign = gojoVoidDetected ? 'Unlimited Void' : 
+                 state.activeTechniques.purple ? 'Hollow Purple' :
                  (state.activeTechniques.red && state.activeTechniques.blue) ? 'Red & Blue' :
                  state.activeTechniques.red ? 'Reversal Red' : 
                  state.activeTechniques.blue ? 'Lapse Blue' :
@@ -1146,6 +1386,8 @@ export default function JJKExperience() {
     setDetectedSign(sign);
     setActivePill(sign);
   };
+
+
 
   const handleNoHands = () => {
     const state = stateRef.current;
@@ -1163,9 +1405,38 @@ export default function JJKExperience() {
     
     // Thresholds
     const HOLD_FRAMES = 6; 
-    const LOST_FRAMES = domain === 'gojo_void' ? 60 : 20; 
+    const LOST_FRAMES = domain === 'gojo_void' ? 60 : 8; 
 
     const isTechnique = domain === 'gojo_red' || domain === 'gojo_blue';
+
+    // Hollow Purple Proximity Check
+    const purpleThreshold = 0.35; // Increased threshold for easier triggering
+    const readyThreshold = 0.75;  // Distance at which the "ready" cue starts appearing
+    const distSq = (a: THREE.Vector3, b: THREE.Vector3) => (a.x - b.x)**2 + (a.y - b.y)**2 + (a.z - b.z)**2;
+    const currentDistSq = distSq(state.fingertipRed, state.fingertipBlue);
+    const handsClose = currentDistSq < purpleThreshold**2;
+    const bothActive = state.activeTechniques.red && state.activeTechniques.blue;
+
+    // Update proximity for visual cues
+    if (bothActive && currentDistSq < readyThreshold**2) {
+      const dist = Math.sqrt(currentDistSq);
+      // Map distance [purpleThreshold, readyThreshold] to [1, 0]
+      state.purpleProximity = Math.max(0, Math.min(1, (readyThreshold - dist) / (readyThreshold - purpleThreshold)));
+      if (!isPurpleReady) setIsPurpleReady(true);
+    } else {
+      state.purpleProximity = 0;
+      if (isPurpleReady) setIsPurpleReady(false);
+    }
+
+    if (bothActive && handsClose && state.purplePhase === 'none') {
+      state.purplePhase = 'forming';
+      state.purpleClock = 0;
+      state.activeTechniques.purple = true;
+      setShowCinematicText(true);
+      // Increased duration to 7 seconds for better readability
+      setTimeout(() => setShowCinematicText(false), 7000);
+      playDomainAudio('gojo_purple');
+    }
 
     if (detected) {
       state.lostCounts[domain] = 0;
@@ -1219,12 +1490,67 @@ export default function JJKExperience() {
     }
 
     // Update tech blends independently of the detection logic above
-    const blendSpeed = 0.01;
-    if (state.activeTechniques.red) state.techBlendRed = Math.min(1, state.techBlendRed + blendSpeed);
-    else state.techBlendRed = Math.max(0, state.techBlendRed - blendSpeed);
+    const appearSpeed = 0.012; // Slower, more weighted formation
+    const disappearSpeed = 0.08; // Snappy dissipation when hand is released
+    
+    if (state.activeTechniques.red) state.techBlendRed = Math.min(1, state.techBlendRed + appearSpeed);
+    else state.techBlendRed = Math.max(0, state.techBlendRed - disappearSpeed);
 
-    if (state.activeTechniques.blue) state.techBlendBlue = Math.min(1, state.techBlendBlue + blendSpeed);
-    else state.techBlendBlue = Math.max(0, state.techBlendBlue - blendSpeed);
+    if (state.activeTechniques.blue) state.techBlendBlue = Math.min(1, state.techBlendBlue + appearSpeed);
+    else state.techBlendBlue = Math.max(0, state.techBlendBlue - disappearSpeed);
+
+    // Hollow Purple Phase Management
+    if (state.activeTechniques.purple) {
+      state.purpleClock += 0.016; // Approx delta
+      if (state.purplePhase === 'forming') {
+        state.techBlendPurple = Math.min(1, state.techBlendPurple + 0.015);
+        if (state.techBlendPurple >= 1 && state.purpleClock > 1.2) {
+          state.purplePhase = 'active';
+          state.purpleClock = 0;
+          setFlashActive(true);
+          setTimeout(() => setFlashActive(false), 150);
+        }
+      } else if (state.purplePhase === 'active') {
+        if (state.purpleClock > 1.8) {
+          state.purplePhase = 'imploding';
+          state.purpleClock = 0;
+          setFlashActive(true);
+          setTimeout(() => setFlashActive(false), 250);
+          state.purpleShockwave = 1.0;
+        }
+      } else if (state.purplePhase === 'imploding') {
+        state.techBlendPurple = Math.max(0, state.techBlendPurple - 0.08);
+        state.purpleShockwave = Math.max(0, state.purpleShockwave - 0.04);
+        if (state.techBlendPurple <= 0) {
+          state.activeTechniques.purple = false;
+          state.purplePhase = 'none';
+          state.purpleCooldown = 2.0; // 2 second cooldown after Hollow Purple
+          state.activeTechniques.red = false;
+          state.activeTechniques.blue = false;
+          state.purpleShockwave = 0;
+        }
+      }
+    } else {
+      state.techBlendPurple = Math.max(0, state.techBlendPurple - 0.1);
+      state.purpleShockwave = Math.max(0, state.purpleShockwave - 0.05);
+    }
+
+    // Update hold instruction visibility
+    const isAnyHolding = state.holdCounts.gojo_void > 0 || 
+                         state.holdCounts.sukuna_shrine > 0 || 
+                         state.holdCounts.gojo_red > 0 || 
+                         state.holdCounts.gojo_blue > 0;
+    
+    const isAnyActive = state.activeDomain !== null || 
+                        state.activeTechniques.red || 
+                        state.activeTechniques.blue || 
+                        state.activeTechniques.purple;
+
+    if (isAnyHolding && !isAnyActive) {
+      if (!showHoldInstruction) setShowHoldInstruction(true);
+    } else {
+      if (showHoldInstruction) setShowHoldInstruction(false);
+    }
   };
 
   const activateDomain = (domain: ActiveDomain) => {
@@ -1346,21 +1672,48 @@ export default function JJKExperience() {
     return indexClose && thumbClose && isFolded(left) && isFolded(right) && vertical;
   };
 
-  const updateFingertipWorld = (lm: any, target: 'red' | 'blue' | 'general' = 'general') => {
+  const updateFingertipWorld = (lm: any, dt: number, target: 'red' | 'blue' | 'general' = 'general') => {
     if (!cameraRef.current) return;
+    const state = stateRef.current;
     const tip = lm[8];
-    // Use tip.x directly because selfieMode: true already mirrors the coordinates
     const x = tip.x * 2 - 1;
     const y = (1 - tip.y) * 2 - 1;
     const vector = new THREE.Vector3(x, y, 0.5);
     vector.unproject(cameraRef.current);
     const dir = vector.sub(cameraRef.current.position).normalize();
     const distance = -cameraRef.current.position.z / dir.z;
-    const pos = cameraRef.current.position.clone().add(dir.multiplyScalar(distance));
+    const rawPos = cameraRef.current.position.clone().add(dir.multiplyScalar(distance));
     
-    if (target === 'red') stateRef.current.fingertipRed.copy(pos);
-    else if (target === 'blue') stateRef.current.fingertipBlue.copy(pos);
-    else stateRef.current.fingertipWorld.copy(pos);
+    let currentPos: THREE.Vector3;
+    let currentVel: THREE.Vector3;
+    
+    if (target === 'red') {
+      currentPos = state.fingertipRed;
+      currentVel = state.fingertipRedVel;
+    } else if (target === 'blue') {
+      currentPos = state.fingertipBlue;
+      currentVel = state.fingertipBlueVel;
+    } else {
+      currentPos = state.fingertipWorld;
+      currentVel = new THREE.Vector3(); // Dummy
+    }
+
+    if (dt > 0 && dt < 0.2) {
+      // Calculate velocity for prediction
+      const newVel = rawPos.clone().sub(currentPos).divideScalar(dt);
+      currentVel.lerp(newVel, 0.4); // Smooth velocity tracking
+      
+      // Prediction: Compensate for ~60ms of total latency (camera + processing + render)
+      const predictionTime = 0.06;
+      const predictedPos = rawPos.clone().add(currentVel.clone().multiplyScalar(predictionTime));
+      
+      // Adaptive smoothing: more responsive when moving fast, more stable when still
+      const speed = currentVel.length();
+      const lerpFactor = Math.min(0.98, 0.75 + speed * 0.15);
+      currentPos.lerp(predictedPos, lerpFactor);
+    } else {
+      currentPos.copy(rawPos);
+    }
   };
 
   const easeInOutCubic = (t: number) => t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
@@ -1553,7 +1906,11 @@ export default function JJKExperience() {
     
     const isRed = state.activeDomain === 'gojo_red' || state.activeTechniques.red;
     const isBlue = state.activeDomain === 'gojo_blue' || state.activeTechniques.blue;
+    const isPurple = state.activeTechniques.purple;
     
+    if (isPurple) {
+      return { jp: '虚式「茈」', en: 'HOLLOW PURPLE', sub: 'imaginary mass • collapse of infinity' };
+    }
     if (isRed && isBlue) {
       return { jp: '術式反転「赫」 • 術式順転「蒼」', en: 'RED • BLUE', sub: 'convergence & divergence of infinity' };
     }
@@ -1568,7 +1925,8 @@ export default function JJKExperience() {
 
   return (
     <div className={`relative w-full h-screen bg-black overflow-hidden font-sans text-white ${
-      stateRef.current.activeDomain === 'sukuna_shrine' && stateRef.current.domainState === DOMAIN_STATES.ACTIVE ? 'animate-shake' : ''
+      (stateRef.current.activeDomain === 'sukuna_shrine' && stateRef.current.domainState === DOMAIN_STATES.ACTIVE) ||
+      (stateRef.current.activeTechniques.purple && stateRef.current.purplePhase !== 'none') ? 'animate-shake' : ''
     }`}>
       {/* Gojo Specific Overlays */}
       <div 
@@ -1606,6 +1964,7 @@ export default function JJKExperience() {
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
             className={`fixed inset-0 z-[1000] pointer-events-none ${
+              stateRef.current.activeTechniques.purple ? 'bg-purple-500/60' :
               stateRef.current.activeDomain === 'sukuna_shrine' ? 'bg-red-500/80' : 
               stateRef.current.activeDomain === 'gojo_void' ? 'bg-blue-100/90' : 'bg-white'
             }`}
@@ -1617,8 +1976,10 @@ export default function JJKExperience() {
       <div 
         className="fixed inset-0 z-50 pointer-events-none transition-opacity duration-1000"
         style={{ 
-          opacity: stateRef.current.domainState === DOMAIN_STATES.ACTIVE ? 1 : 0,
-          background: stateRef.current.activeDomain === 'sukuna_shrine' 
+          opacity: stateRef.current.domainState === DOMAIN_STATES.ACTIVE || stateRef.current.activeTechniques.purple ? 1 : 0,
+          background: stateRef.current.activeTechniques.purple
+            ? 'radial-gradient(ellipse at center, transparent 15%, rgba(40, 0, 60, 0.4) 50%, rgba(20, 0, 40, 0.9) 100%)'
+            : stateRef.current.activeDomain === 'sukuna_shrine' 
             ? 'radial-gradient(ellipse at center, rgba(0, 0, 0, 0) 10%, rgba(0, 0, 0, 0.88) 75%, #000 100%)'
             : stateRef.current.activeDomain === 'gojo_void'
             ? 'radial-gradient(ellipse at center, transparent 15%, rgba(0, 15, 35, 0.6) 50%, rgba(0, 5, 15, 0.95) 100%)'
@@ -1634,10 +1995,17 @@ export default function JJKExperience() {
             animate={{ opacity: 1, scale: 1 }}
             exit={{ opacity: 0 }}
             transition={{ duration: 1.7, ease: [0.16, 1, 0.3, 1] }}
-            className="fixed inset-0 z-[150] flex flex-col items-center justify-center pointer-events-none text-center"
+            className={`fixed inset-0 z-[200] flex flex-col items-center justify-center pointer-events-none text-center ${
+              stateRef.current.activeTechniques.purple ? '-translate-y-32' : ''
+            }`}
           >
+            {stateRef.current.activeTechniques.purple && (
+              <div className="absolute inset-x-0 h-64 bg-black/40 blur-3xl -z-10" />
+            )}
             <div className={`text-[clamp(38px,7vw,82px)] tracking-[0.5em] font-bold font-serif ${
-              stateRef.current.activeDomain === 'gojo_void' || (stateRef.current.activeTechniques.blue && !stateRef.current.activeTechniques.red) 
+              stateRef.current.activeTechniques.purple
+                ? 'text-purple-400 animate-void-glow drop-shadow-[0_0_35px_rgba(160,80,255,1)]'
+                : stateRef.current.activeDomain === 'gojo_void' || (stateRef.current.activeTechniques.blue && !stateRef.current.activeTechniques.red) 
                 ? 'text-blue-300 animate-void-glow drop-shadow-[0_0_25px_rgba(80,180,255,1)]' 
                 : stateRef.current.activeDomain === 'sukuna_shrine'
                 ? 'text-[#ff2200] [text-shadow:0_0_90px_rgba(255,0,0,1)] drop-shadow-[0_0_25px_rgba(255,0,0,1)]'
@@ -1648,7 +2016,9 @@ export default function JJKExperience() {
               {getCinematicContent()?.jp}
             </div>
             <div className={`mt-4 text-2xl tracking-[0.4em] uppercase font-bold ${
-              stateRef.current.activeDomain === 'gojo_void' || (stateRef.current.activeTechniques.blue && !stateRef.current.activeTechniques.red)
+              stateRef.current.activeTechniques.purple
+                ? 'bg-gradient-to-r from-purple-400 to-indigo-400 bg-clip-text text-transparent'
+                : stateRef.current.activeDomain === 'gojo_void' || (stateRef.current.activeTechniques.blue && !stateRef.current.activeTechniques.red)
                 ? 'text-blue-200/90' 
                 : stateRef.current.activeDomain === 'sukuna_shrine'
                 ? 'text-red-500'
@@ -1659,7 +2029,9 @@ export default function JJKExperience() {
               {getCinematicContent()?.en}
             </div>
             <div className={`mt-2 text-sm tracking-[0.3em] ${
-              stateRef.current.activeDomain === 'gojo_void' || (stateRef.current.activeTechniques.blue && !stateRef.current.activeTechniques.red)
+              stateRef.current.activeTechniques.purple
+                ? 'text-purple-200/70'
+                : stateRef.current.activeDomain === 'gojo_void' || (stateRef.current.activeTechniques.blue && !stateRef.current.activeTechniques.red)
                 ? 'text-blue-200/70' 
                 : stateRef.current.activeDomain === 'sukuna_shrine'
                 ? 'text-red-400/80'
@@ -1727,9 +2099,17 @@ export default function JJKExperience() {
               <motion.div 
                 initial={{ opacity: 0, x: -10 }}
                 animate={{ opacity: 1, x: 0 }}
-                className="text-[10px] text-red-500/90 tracking-widest uppercase max-w-[300px] leading-relaxed"
+                className="flex flex-col gap-3"
               >
-                {cameraError}
+                <div className="text-[10px] text-red-500/90 tracking-widest uppercase max-w-[300px] leading-relaxed">
+                  {cameraError}
+                </div>
+                <button 
+                  onClick={handleRetryCamera}
+                  className="w-fit px-4 py-1.5 rounded-full border border-red-500/30 bg-red-500/10 text-[10px] text-red-400 tracking-[0.2em] uppercase hover:bg-red-500/20 transition-colors pointer-events-auto"
+                >
+                  Retry Connection
+                </button>
               </motion.div>
             )}
           </div>
@@ -1750,7 +2130,9 @@ export default function JJKExperience() {
               <div className="w-[220px] h-[5px] bg-white/10 rounded-[3px] overflow-hidden">
                 <motion.div
                   className={`h-full rounded-[3px] shadow-[0_0_18px_rgba(255,80,80,1)] ${
-                    stateRef.current.activeDomain === 'gojo_void' || activePill === 'Unlimited Void'
+                    stateRef.current.activeTechniques.purple
+                      ? 'bg-gradient-to-r from-purple-600 via-purple-400 to-white shadow-[0_0_20px_rgba(160,80,255,1)]'
+                      : stateRef.current.activeDomain === 'gojo_void' || activePill === 'Unlimited Void'
                       ? 'bg-gradient-to-r from-[#2d7bb5] via-[#5da8d8] to-[#ffffff] shadow-[0_0_20px_rgba(160,216,239,1)]'
                       : 'bg-gradient-to-r from-[#330000] via-[#ff0000] to-[#ff9966] shadow-[0_0_18px_rgba(255,80,80,1)]'
                   }`}
@@ -1760,10 +2142,34 @@ export default function JJKExperience() {
               <span className={`text-[12px] tracking-[0.38em] uppercase ${
                 stateRef.current.activeDomain === 'gojo_void' || activePill === 'Unlimited Void'
                   ? 'text-blue-100/80 [text-shadow:0_0_10px_rgba(160,216,239,0.5)]'
+                  : isPurpleReady
+                  ? 'text-purple-300 [text-shadow:0_0_15px_rgba(160,80,255,0.8)] animate-pulse'
                   : 'text-red-200/80 [text-shadow:0_0_12px_rgba(255,80,80,0.7)]'
               }`}>
-                {stateRef.current.activeDomain === 'gojo_void' || activePill === 'Unlimited Void' ? 'Channeling Energy' : 'Form the Shrine Seal'}
+                {stateRef.current.activeDomain === 'gojo_void' || activePill === 'Unlimited Void' 
+                  ? 'Channeling Energy' 
+                  : isPurpleReady 
+                  ? 'Hollow Purple Ready' 
+                  : 'Form the Shrine Seal'}
               </span>
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        {/* Hold Instruction */}
+        <AnimatePresence>
+          {showHoldInstruction && (
+            <motion.div
+              initial={{ opacity: 0, y: -10 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -10 }}
+              className="absolute top-8 left-1/2 -translate-x-1/2 flex flex-col items-center z-50"
+            >
+              <div className="px-3 py-1 rounded-full bg-white/5 border border-white/10 backdrop-blur-md">
+                <span className="text-[9px] tracking-[0.3em] uppercase text-white/50 font-medium whitespace-nowrap">
+                  Hold the sign until the domain is formed
+                </span>
+              </div>
             </motion.div>
           )}
         </AnimatePresence>
@@ -1781,6 +2187,8 @@ export default function JJKExperience() {
                     ? 'border-red-500/50 bg-red-950/30 text-red-400 shadow-[0_0_20px_rgba(255,0,0,0.2)]' 
                     : activePill === 'Unlimited Void'
                     ? 'border-blue-400 bg-blue-950/80 text-blue-300 shadow-[0_0_25px_rgba(160,216,239,0.6)]'
+                    : activePill === 'Hollow Purple'
+                    ? 'border-purple-400 bg-purple-950/80 text-purple-300 shadow-[0_0_30px_rgba(160,80,255,0.7)]'
                     : 'border-blue-500/50 bg-blue-950/30 text-blue-400 shadow-[0_0_20px_rgba(0,0,255,0.2)]'
                 }`}
               >
