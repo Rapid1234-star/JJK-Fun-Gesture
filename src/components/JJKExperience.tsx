@@ -7,6 +7,8 @@ import { Hands, HAND_CONNECTIONS, Results } from '@mediapipe/hands';
 import { Camera } from '@mediapipe/camera_utils';
 import { drawConnectors, drawLandmarks } from '@mediapipe/drawing_utils';
 import { motion, AnimatePresence } from 'motion/react';
+import { Volume2, VolumeX } from 'lucide-react';
+
 
 // --- Constants & Types ---
 const DOMAIN_STATES = {
@@ -114,12 +116,34 @@ export default function JJKExperience() {
   const [domainShock, setDomainShock] = useState(false);
   const [isPurpleReady, setIsPurpleReady] = useState(false);
   const [showHoldInstruction, setShowHoldInstruction] = useState(false);
+  const [isMuted, setIsMuted] = useState(false);
   const slashIdRef = useRef(0);
+
   const debrisIdRef = useRef(0);
 
   // --- Initialization ---
 
   useEffect(() => {
+    // Initialize BGM
+    const bgm = new Audio('/BGM.mp3');
+    bgm.loop = true;
+    bgm.volume = 0.5;
+    bgmRef.current = bgm;
+
+    return () => {
+      bgm.pause();
+      bgm.src = "";
+    };
+  }, []);
+
+  useEffect(() => {
+    if (bgmRef.current) {
+      bgmRef.current.muted = isMuted;
+    }
+  }, [isMuted]);
+
+  useEffect(() => {
+
     if (!isInitialized) return;
 
     const handleResize = () => {
@@ -1893,7 +1917,11 @@ export default function JJKExperience() {
   const handleEnter = () => {
     setShowIntro(false);
     setIsInitialized(true);
+    if (bgmRef.current) {
+      bgmRef.current.play().catch(e => console.error("Audio play failed:", e));
+    }
   };
+
 
   const getCinematicContent = () => {
     const state = stateRef.current;
@@ -2113,10 +2141,27 @@ export default function JJKExperience() {
               </motion.div>
             )}
           </div>
-          <div className="text-right text-[13px] tracking-[0.32em] uppercase text-red-200/78">
-            Domain: <span>{currentDomainName || 'None'}</span>
+          <div className="flex flex-col items-end gap-3 text-right">
+            <div className="text-[13px] tracking-[0.32em] uppercase text-red-200/78">
+              Domain: <span>{currentDomainName || 'None'}</span>
+            </div>
+            <button 
+              onClick={() => setIsMuted(!isMuted)}
+              className="group flex items-center gap-3 px-4 py-2 rounded-full border border-white/10 bg-white/5 backdrop-blur-md hover:bg-white/10 transition-all pointer-events-auto"
+              title={isMuted ? "Unmute" : "Mute"}
+            >
+              <span className="text-[10px] tracking-[0.2em] uppercase text-white/40 group-hover:text-white/70 transition-colors">
+                {isMuted ? "Audio Off" : "Audio On"}
+              </span>
+              {isMuted ? (
+                <VolumeX className="w-4 h-4 text-red-400" />
+              ) : (
+                <Volume2 className="w-4 h-4 text-blue-400 animate-pulse" />
+              )}
+            </button>
           </div>
         </div>
+
 
         {/* Center Progress */}
         <AnimatePresence>
@@ -2226,7 +2271,21 @@ export default function JJKExperience() {
                stateRef.current.activeDomain === 'sukuna_shrine' && stateRef.current.domainState !== DOMAIN_STATES.IDLE ? 'RYOMEN SUKUNA' : ''}
             </div>
           </div>
-          <div className="w-32" /> {/* Spacer to balance the left side */}
+          <div className="w-32 flex justify-end">
+            <a 
+              href="https://github.com/Rapid1234-star/JJK-Fun-Gesture" 
+              target="_blank" 
+              rel="noopener noreferrer"
+              className="group pointer-events-auto transition-transform hover:scale-110 active:scale-95"
+            >
+              <img 
+                src="/Images/github.png" 
+                alt="GitHub" 
+                className="w-10 h-10 invert opacity-60 group-hover:opacity-100 transition-opacity drop-shadow-[0_0_15px_rgba(255,255,255,0.5)]"
+              />
+            </a>
+          </div>
+
         </div>
       </div>
 

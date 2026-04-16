@@ -97,3 +97,9 @@ This project is intended for educational and creative development purposes.
 ## 🎯 Final Note
 
 Unleash your imagination, refine the effects, and make every interaction feel like a true **Domain Expansion** moment. 💥
+
+## 🎵 Audio Credits
+**BGM**: "FAVELA" by MXZI, Deno  
+**Music provided by**: NoCopyrightSounds  
+**Download**: https://ncs.io/FAVELA  
+**Watch**: https://ncs.lnk.to/FAVELAAT/youtube
