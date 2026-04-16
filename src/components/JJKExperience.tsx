@@ -21,6 +21,19 @@ const DOMAIN_STATES = {
 
 type DomainState = typeof DOMAIN_STATES[keyof typeof DOMAIN_STATES];
 type ActiveDomain = 'gojo_void' | 'gojo_red' | 'gojo_blue' | 'gojo_purple' | 'sukuna_shrine' | null;
+type VoiceLanguage = 'en' | 'jp';
+
+const VOICE_LANGUAGE_STORAGE_KEY = 'jjk-voice-language';
+const DOMAIN_VOICE_LINES: Record<'gojo_void' | 'sukuna_shrine', Record<VoiceLanguage, string>> = {
+  gojo_void: {
+    en: '/Dialogue/Eng/Gojo-Eng.mp3',
+    jp: '/Dialogue/Jap/Gojo-J.mp3'
+  },
+  sukuna_shrine: {
+    en: '/Dialogue/Eng/Sukuna-Eng.mp3',
+    jp: '/Dialogue/Jap/Sukuna-J.mp3'
+  }
+};
 
 export default function JJKExperience() {
   // --- Refs ---
@@ -53,6 +66,12 @@ export default function JJKExperience() {
   const sixEyesRef = useRef<HTMLDivElement>(null);
   const kanjiRainStateRef = useRef({ running: false, phaseRAF: 0, overloadRAF: 0 });
   const raysStateRef = useRef({ running: false, raf: 0, angle: 0 });
+  const bgmPauseStateRef = useRef({
+    time: 0,
+    shouldResume: false,
+    pausedForVoice: false
+  });
+  const voicePlaybackIdRef = useRef(0);
 
   // State Refs (for the loop)
   const stateRef = useRef({
@@ -117,6 +136,17 @@ export default function JJKExperience() {
   const [isPurpleReady, setIsPurpleReady] = useState(false);
   const [showHoldInstruction, setShowHoldInstruction] = useState(false);
   const [isMuted, setIsMuted] = useState(false);
+  const [voiceLanguage, setVoiceLanguage] = useState<VoiceLanguage>(() => {
+    if (typeof window === 'undefined') return 'en';
+
+    try {
+      const savedLanguage = window.localStorage.getItem(VOICE_LANGUAGE_STORAGE_KEY);
+      return savedLanguage === 'jp' ? 'jp' : 'en';
+    } catch {
+      return 'en';
+    }
+  });
+  const voiceLanguageRef = useRef<VoiceLanguage>(voiceLanguage);
   const slashIdRef = useRef(0);
 
   const debrisIdRef = useRef(0);
@@ -130,7 +160,15 @@ export default function JJKExperience() {
     bgm.volume = 0.5;
     bgmRef.current = bgm;
 
+    const voice = new Audio();
+    voice.preload = 'auto';
+    voiceRef.current = voice;
+
     return () => {
+      voice.pause();
+      voice.onended = null;
+      voice.onerror = null;
+      voice.src = "";
       bgm.pause();
       bgm.src = "";
     };
@@ -140,7 +178,21 @@ export default function JJKExperience() {
     if (bgmRef.current) {
       bgmRef.current.muted = isMuted;
     }
+
+    if (voiceRef.current) {
+      voiceRef.current.muted = isMuted;
+    }
   }, [isMuted]);
+
+  useEffect(() => {
+    voiceLanguageRef.current = voiceLanguage;
+
+    try {
+      window.localStorage.setItem(VOICE_LANGUAGE_STORAGE_KEY, voiceLanguage);
+    } catch {
+      // Ignore storage failures and keep the in-memory selection active.
+    }
+  }, [voiceLanguage]);
 
   useEffect(() => {
 
@@ -1625,9 +1677,74 @@ export default function JJKExperience() {
     }
   };
 
+  const pauseBgmForVoicePlayback = () => {
+    const bgm = bgmRef.current;
+    if (!bgm) return;
+
+    const pauseState = bgmPauseStateRef.current;
+    if (pauseState.pausedForVoice) return;
+
+    pauseState.time = bgm.currentTime;
+    pauseState.shouldResume = !bgm.paused;
+    pauseState.pausedForVoice = true;
+
+    if (!bgm.paused) {
+      bgm.pause();
+    }
+  };
+
+  const resumeBgmFromPausePoint = (playbackId: number) => {
+    if (voicePlaybackIdRef.current !== playbackId) return;
+
+    const bgm = bgmRef.current;
+    const pauseState = bgmPauseStateRef.current;
+
+    voicePlaybackIdRef.current = 0;
+
+    if (!pauseState.pausedForVoice) return;
+
+    const resumeTime = pauseState.time;
+    const shouldResume = pauseState.shouldResume;
+
+    pauseState.time = 0;
+    pauseState.shouldResume = false;
+    pauseState.pausedForVoice = false;
+
+    if (!bgm || !shouldResume) return;
+
+    bgm.currentTime = resumeTime;
+    bgm.play().catch((error) => console.error('BGM resume failed:', error));
+  };
+
   const playDomainAudio = (domain: ActiveDomain) => {
-    // In a real app, we'd have these files. For now, we'll just log.
-    console.log(`Playing audio for ${domain}`);
+    if (domain !== 'gojo_void' && domain !== 'sukuna_shrine') return;
+
+    const voice = voiceRef.current;
+    if (!voice) return;
+
+    const voiceLine = DOMAIN_VOICE_LINES[domain][voiceLanguageRef.current];
+    const playbackId = voicePlaybackIdRef.current + 1;
+    voicePlaybackIdRef.current = playbackId;
+
+    voice.pause();
+    voice.currentTime = 0;
+    voice.onended = null;
+    voice.onerror = null;
+
+    pauseBgmForVoicePlayback();
+
+    voice.src = voiceLine;
+    voice.muted = isMuted;
+    voice.onended = () => resumeBgmFromPausePoint(playbackId);
+    voice.onerror = () => {
+      console.error(`Voice line failed to load: ${voiceLine}`);
+      resumeBgmFromPausePoint(playbackId);
+    };
+
+    voice.play().catch((error) => {
+      console.error(`Voice line playback failed: ${voiceLine}`, error);
+      resumeBgmFromPausePoint(playbackId);
+    });
   };
 
   // --- Gesture Classifiers ---
@@ -2286,6 +2403,40 @@ export default function JJKExperience() {
             </a>
           </div>
 
+        </div>
+      </div>
+
+      <div className="fixed left-3 top-1/2 z-[600] -translate-y-1/2 pointer-events-none">
+        <div className="pointer-events-auto flex flex-col gap-1 rounded-r-2xl border border-white/10 border-l-0 bg-black/35 px-2 py-3 backdrop-blur-md shadow-[0_0_25px_rgba(0,0,0,0.25)]">
+          <div className="px-2 text-[9px] tracking-[0.3em] uppercase text-white/35">
+            Voice
+          </div>
+          <button
+            type="button"
+            onClick={() => setVoiceLanguage('en')}
+            aria-pressed={voiceLanguage === 'en'}
+            className={`min-w-[64px] rounded-xl px-3 py-2 text-[10px] tracking-[0.3em] uppercase transition-all ${
+              voiceLanguage === 'en'
+                ? 'bg-blue-300/20 text-blue-100 shadow-[0_0_20px_rgba(160,216,239,0.25)]'
+                : 'bg-white/5 text-white/45 hover:bg-white/10 hover:text-white/70'
+            }`}
+            title="Switch voice lines to English"
+          >
+            English
+          </button>
+          <button
+            type="button"
+            onClick={() => setVoiceLanguage('jp')}
+            aria-pressed={voiceLanguage === 'jp'}
+            className={`min-w-[64px] rounded-xl px-3 py-2 text-[10px] tracking-[0.3em] uppercase transition-all ${
+              voiceLanguage === 'jp'
+                ? 'bg-red-500/20 text-red-100 shadow-[0_0_20px_rgba(255,80,80,0.25)]'
+                : 'bg-white/5 text-white/45 hover:bg-white/10 hover:text-white/70'
+            }`}
+            title="Switch voice lines to Japanese"
+          >
+            Japanese
+          </button>
         </div>
       </div>
 
